@@ -1,0 +1,137 @@
+//add layer
+var Val = ee.Image("users/valeriecornet97/Val")
+Map.addLayer(Val, {bands:["b1","b2", "b3"]}, "Val")
+
+//Classification
+//-----------------------------------------------------------------------------------------------------
+var bands = ['b3','b2','b1'];
+//------------------------------
+//Coral
+//------------------------------
+var LC_points = ee.FeatureCollection.randomPoints(LC, 6000);
+
+//set substrate property of each point in coral feature collection
+
+var LC_points_2 = LC_points.map(function(ft){return ee.Feature(ft).set('Substrate', 0);
+});
+
+//print(LC_points_2);
+//------------------------------
+//Sand
+//------------------------------
+var Sand_points = ee.FeatureCollection.randomPoints(Sand, 6000);
+
+//set substrate properties in sand feature collection
+
+var Sand_points_2 = Sand_points.map(function(ft){return ee.Feature(ft).set('Substrate', 2)});
+
+//print(Sand_points_2)
+//-----------------------------
+//Rock
+//-----------------------------
+var Rock_points = ee.FeatureCollection.randomPoints(Rock, 6000);
+// below function sets the substrate properties of each point in the Rock feature collection
+var Rock_points_2 = Rock_points.map(function(ft){
+  return ee.Feature(ft).set('Substrate', 1);
+});
+  
+//print(Rock_points_2);
+//----------------------------------------------
+//Sunglint
+//----------------------------------------------
+var glint_points = ee.FeatureCollection.randomPoints(Sunglint, 6000);
+
+// below function sets the substrate properties of each point in the sand feature collection
+var Glint_points_2 = glint_points.map(function(ft){
+  return ee.Feature(ft).set('Substrate', 3);
+});
+//print(Glint_points_2)
+//------------------------------------------------
+//algae
+//------------------------------------------------
+var algae_points = ee.FeatureCollection.randomPoints(Algae, 6000);
+
+// below function sets the substrate properties of each point in the sand feature collection
+var algae_points_2 = algae_points.map(function(ft){
+  return ee.Feature(ft).set('Substrate', 4);
+});
+print(algae_points_2)
+
+
+//------------------------------------------------------------------------------------------
+//Classification
+//------------------------------------------------------------------------------------------
+
+//merge feature collection together of all substrates w substrate values
+
+var random_points = (LC_points_2).merge(Rock_points_2).merge(Sand_points_2).merge(Glint_points_2).merge(algae_points_2);
+
+//print(random_points);
+
+//add column of random uniforms to the training feature collection and split 70/30 for validating and testing
+
+var withRandom = random_points.randomColumn({seed:1});
+
+//reserve some for testing
+
+var split = 0.7; //70% testing
+
+var trainingPartitionT = withRandom.filter(ee.Filter.lt('random', split));
+var testingPartition = withRandom.filter(ee.Filter.gte('random', split));
+
+// function to extract all reflectance data from the trainingPartition points to train classifier:
+
+var trainingImage_Collection = function(image){
+  return image.select(bands).sampleRegions({
+  collection: trainingPartitionT,
+  properties: ['Substrate'],
+  scale: 0.0045
+})};
+
+// map the function over the training images with training points in them to get training data:
+
+var trainingPartition = trainingImage_Collection(Val) ;
+
+// Train classifier's with training partition to test accuracy/ choose classifier
+//--------------------------------------------------------------------------------------------
+var trainedClassifierCART_WC = ee.Classifier.cart().train({
+  features: trainingPartition, 
+  classProperty: 'Substrate',
+  inputProperties: bands
+});
+
+//-----------------------------------------------------------------------------
+// classify the entire image collection with CART classifier and assess accuracy:
+//-----------------------------------------------------------------------------
+
+var classifiedVal = Val.select(bands).classify(trainedClassifierCART_WC)
+Map.addLayer(classifiedVal, {
+  min:0, max:3, palette:["green", "purple", "yellow", "white", "red"]
+}, 'Classified Val')
+
+
+// define 5.2m diameter point
+var table1 = ee.FeatureCollection([
+  ee.Geometry.Point([151.9132, -23.4463])]) //input the coordinates of the random points here
+
+var buffered1 = table1.map(function (feature) {
+  return feature.buffer(2.6, 1) //where 2.6 is the radius
+})
+Map.addLayer(buffered1.draw({color: 'FF0000', strokeWidth: 0}), {opacity: 0.9})
+
+var roipoint = buffered1
+
+
+
+var names = ['LC','Rock','Sand','Glint','Algae']
+var count = classifiedVal.eq([0,1,2,3,4]).rename(names);
+var total = count.multiply(ee.Image.pixelArea());
+var area = total.reduceRegion({
+ reducer:ee.Reducer.sum(),
+  geometry:roipoint,
+  scale:0.005,
+ maxPixels: 1e9,
+ bestEffort:true
+});
+var area1 = ee.Dictionary(area)
+print ('Area in (m²):', ee.Number(area1)) // area of each substrate class printed and transfered to an Excel document as a .csv file
